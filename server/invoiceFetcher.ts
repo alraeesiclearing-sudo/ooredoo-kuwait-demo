@@ -26,7 +26,8 @@ async function getBrowser(): Promise<Browser> {
     return browserInstance;
   }
 
-  console.log('🚀 Launching browser...');
+  console.log('Launching browser...');
+  throw new Error('Puppeteer disabled - using mock data only');
 
   const args = [
     '--no-sandbox',
