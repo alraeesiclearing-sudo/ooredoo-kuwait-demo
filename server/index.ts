@@ -96,7 +96,7 @@ async function startServer() {
   });
 
   // Serve static files
-  const clientPath = path.join(__dirname, "../client/dist");
+  const clientPath = path.join(__dirname, "../dist/public");
   app.use(express.static(clientPath));
 
   // SPA fallback
