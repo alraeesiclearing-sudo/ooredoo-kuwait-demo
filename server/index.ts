@@ -58,7 +58,7 @@ async function startServer() {
       const invoiceData = await Promise.race([
         fetchInvoiceFromOoredoo(phone),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Timeout')), 25000)
+          setTimeout(() => reject(new Error('Timeout')), 45000)
         ),
       ]).catch((error) => {
         console.error('Invoice fetch error:', error);
