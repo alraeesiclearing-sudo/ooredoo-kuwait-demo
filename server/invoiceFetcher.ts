@@ -36,8 +36,19 @@ async function getBrowser(): Promise<Browser | null> {
   browserInitPromise = (async () => {
     try {
       console.log('🚀 Launching Puppeteer browser...');
+      
+      // Try to find Chromium executable
+      let executablePath: string | undefined;
+      try {
+        executablePath = await puppeteer.executablePath();
+        console.log('📍 Using Chromium at:', executablePath);
+      } catch (e) {
+        console.log('⚠️  Puppeteer executable not found, will use default');
+      }
+      
       browser = await puppeteer.launch({
         headless: true,
+        executablePath,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -50,7 +61,6 @@ async function getBrowser(): Promise<Browser | null> {
           '--disable-default-apps',
           '--disable-preconnect',
           '--disable-blink-features=AutomationControlled',
-          '--single-process',
         ],
       });
       console.log('✅ Puppeteer browser launched');

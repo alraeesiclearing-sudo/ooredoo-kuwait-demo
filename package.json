@@ -9,8 +9,10 @@
     "start": "NODE_ENV=production node dist/index.js",
     "preview": "vite preview --host",
     "check": "tsc --noEmit",
-    "format": "prettier --write ."
-  },
+    "format": "prettier --write .",
+    "postinstall": "npm run setup-browser",
+    "setup-browser": "node -e \"const puppeteer = require('puppeteer'); puppeteer.executablePath().then(path => console.log('Browser path:', path));\""
+  }
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
     "@radix-ui/react-accordion": "^1.2.12",
