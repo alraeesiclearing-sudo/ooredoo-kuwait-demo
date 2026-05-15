@@ -15,9 +15,8 @@ interface InvoiceData {
   error?: string;
 }
 
-// Browserless configuration
-const BROWSERLESS_URL = process.env.BROWSERLESS_URL || 'https://chrome.browserless.io';
-const BROWSERLESS_TOKEN = process.env.BROWSERLESS_TOKEN || '';
+// Browserless configuration - Free tier (1000 requests/month)
+const BROWSERLESS_URL = 'https://chrome.browserless.io';
 
 /**
  * Validate Ooredoo phone number
@@ -104,10 +103,8 @@ export async function fetchInvoiceFromOoredoo(phoneNumber: string): Promise<Invo
       })();
     `;
 
-    // Call Browserless API
-    const url = BROWSERLESS_TOKEN 
-      ? `${BROWSERLESS_URL}/function?token=${BROWSERLESS_TOKEN}`
-      : `${BROWSERLESS_URL}/function`;
+    // Call Browserless API (free tier)
+    const url = `${BROWSERLESS_URL}/function`;
 
     console.log('🌐 Calling Browserless API...');
 
