@@ -46,11 +46,23 @@ async function getBrowser(): Promise<Browser> {
   ];
 
   try {
-    browserInstance = await puppeteer.launch({
+    const launchOptions: any = {
       args,
       headless: true,
       timeout: 30000,
-    });
+    };
+
+    // Try to use Chrome from system or cache
+    try {
+      const executablePath = await puppeteer.executablePath();
+      if (executablePath) {
+        launchOptions.executablePath = executablePath;
+      }
+    } catch (e) {
+      console.log('Using default Chromium');
+    }
+
+    browserInstance = await puppeteer.launch(launchOptions);
 
     console.log('✅ Browser launched');
     return browserInstance;
