@@ -1,4 +1,14 @@
 import { useState } from 'react';
+import { toast } from 'sonner';
+import AmountConfirmation from './AmountConfirmation';
+import PaymentMethods from './PaymentMethods';
+
+type PageState = 'main' | 'amount' | 'payment';
+
+interface InvoiceData {
+  amount: number;
+  type: 'postpaid' | 'prepaid';
+}
 
 export default function PaymentPage() {
   const [activeTab, setActiveTab] = useState('pay');
@@ -7,6 +17,10 @@ export default function PaymentPage() {
   const [checkedAllNumbers, setCheckedAllNumbers] = useState(false);
   const [checkedPhone, setCheckedPhone] = useState(false);
   const [additionalNumbers, setAdditionalNumbers] = useState<Array<{ number: string; amount: string }>>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [invoiceData, setInvoiceData] = useState<InvoiceData | null>(null);
+  const [currentPage, setCurrentPage] = useState<PageState>('main');
+  const [selectedAmount, setSelectedAmount] = useState(0);
 
   const navItems = [
     { id: 'more', label: 'المزيد', icon: '1000090324.svg' },
@@ -30,6 +44,106 @@ export default function PaymentPage() {
     setAdditionalNumbers(updated);
   };
 
+  const fetchInvoice = async () => {
+    if (!mobileNumber || mobileNumber.length !== 8) {
+      toast.error('يرجى إدخال رقم هاتف صحيح');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const response = await fetch('/api/ooredoo/invoice', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ phone: mobileNumber }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setInvoiceData({
+          amount: data.data.amount,
+          type: data.data.type,
+        });
+        setAmount(data.data.amount.toString());
+        toast.success('تم جلب الفاتورة بنجاح');
+      } else {
+        toast.error(data.error || 'فشل جلب الفاتورة');
+      }
+    } catch (error) {
+      console.error('Error fetching invoice:', error);
+      toast.error('حدث خطأ في الاتصال');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handlePayClick = async () => {
+    if (!mobileNumber) {
+      toast.error('يرجى إدخال رقم الهاتف');
+      return;
+    }
+
+    // If we don't have invoice data, fetch it first
+    if (!invoiceData) {
+      await fetchInvoice();
+      // After fetching, move to amount confirmation
+      setTimeout(() => {
+        setCurrentPage('amount');
+      }, 500);
+    } else {
+      // Already have invoice data, go to amount confirmation
+      setCurrentPage('amount');
+    }
+  };
+
+  const handleAmountConfirm = (confirmedAmount: number) => {
+    setSelectedAmount(confirmedAmount);
+    setCurrentPage('payment');
+  };
+
+  const handlePaymentMethodSelect = (method: string) => {
+    toast.success(`تم اختيار: ${method}`);
+    // Here you would integrate with actual payment gateway
+    console.log(`Payment method selected: ${method}, Amount: ${selectedAmount}, Phone: ${mobileNumber}`);
+    
+    // Reset after successful payment
+    setTimeout(() => {
+      setCurrentPage('main');
+      setMobileNumber('');
+      setAmount('');
+      setInvoiceData(null);
+      setSelectedAmount(0);
+    }, 1000);
+  };
+
+  // Render different pages based on currentPage state
+  if (currentPage === 'amount' && invoiceData) {
+    return (
+      <AmountConfirmation
+        phoneNumber={mobileNumber}
+        accountType={invoiceData.type}
+        dueAmount={invoiceData.amount}
+        onConfirm={handleAmountConfirm}
+        onBack={() => setCurrentPage('main')}
+      />
+    );
+  }
+
+  if (currentPage === 'payment') {
+    return (
+      <PaymentMethods
+        phoneNumber={mobileNumber}
+        amount={selectedAmount}
+        onSelectMethod={handlePaymentMethodSelect}
+        onBack={() => setCurrentPage('amount')}
+      />
+    );
+  }
+
+  // Main payment page
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col" dir="rtl">
       {/* Header */}
@@ -89,6 +203,7 @@ export default function PaymentPage() {
                   placeholder="رقم الهاتف"
                   value={mobileNumber}
                   onChange={(e) => setMobileNumber(e.target.value)}
+                  onBlur={fetchInvoice}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-400"
                 />
               </div>
@@ -104,6 +219,7 @@ export default function PaymentPage() {
                     placeholder="0.000"
                     value={amount}
                     onChange={(e) => setAmount(e.target.value)}
+                    readOnly={invoiceData?.type === 'postpaid'}
                     className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-400"
                   />
                   <span className="text-gray-600 font-medium whitespace-nowrap">د.ك</span>
@@ -131,6 +247,26 @@ export default function PaymentPage() {
                 />
               </label>
             </div>
+
+            {/* Invoice Info Display */}
+            {invoiceData && (
+              <div className="mt-6 pt-6 border-t border-gray-200">
+                <div className="flex justify-between items-center">
+                  <div className="text-right">
+                    <p className="text-gray-600 text-sm">نوع الحساب</p>
+                    <p className="text-lg font-semibold text-gray-800">
+                      {invoiceData.type === 'postpaid' ? 'فاتورة' : 'مسبق الدفع'}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-gray-600 text-sm">المبلغ المستحق</p>
+                    <p className="text-lg font-semibold text-red-600">
+                      {invoiceData.amount.toFixed(3)} د.ك
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Additional Numbers */}
             {additionalNumbers.length > 0 && (
@@ -189,8 +325,16 @@ export default function PaymentPage() {
 
       {/* Pay Button */}
       <div className="fixed bottom-24 left-0 right-0 px-4 py-4 bg-gray-50">
-        <button className="w-full py-3 bg-gray-300 text-gray-600 rounded-lg font-semibold hover:bg-gray-400">
-          دفع (د.ك 0.000)
+        <button
+          onClick={handlePayClick}
+          disabled={isLoading || !mobileNumber}
+          className={`w-full py-3 rounded-lg font-semibold transition-colors ${
+            isLoading || !mobileNumber
+              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              : 'bg-red-600 text-white hover:bg-red-700'
+          }`}
+        >
+          {isLoading ? 'جاري التحميل...' : `دفع (د.ك ${parseFloat(amount) || 0})`}
         </button>
       </div>
 
