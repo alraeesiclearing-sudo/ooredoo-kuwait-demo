@@ -2,7 +2,7 @@ import express from "express";
 import { createServer } from "http";
 import path from "path";
 import { fileURLToPath } from "url";
-import { fetchInvoiceFromOoredoo, isValidOoredooNumber, closeBrowser } from "./invoiceFetcher.js";
+import { fetchInvoiceFromOoredoo } from "./invoiceFetcher.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
