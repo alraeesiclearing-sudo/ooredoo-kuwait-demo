@@ -2,9 +2,27 @@ import express from "express";
 import { createServer } from "http";
 import path from "path";
 import { fileURLToPath } from "url";
+import puppeteer, { Browser } from "puppeteer";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+let browser: Browser | null = null;
+
+async function initBrowser() {
+  if (!browser) {
+    browser = await puppeteer.launch({
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+      ],
+    });
+  }
+  return browser;
+}
 
 async function startServer() {
   const app = express();
@@ -38,18 +56,18 @@ async function startServer() {
         });
       }
 
-      // Fetch invoice from Ooredoo
-      const invoiceData = await fetchInvoiceFromOoredoo(phone);
+      // Fetch invoice from Ooredoo using Puppeteer
+      const invoiceData = await fetchInvoiceFromOoredooWithPuppeteer(phone);
 
-      if (invoiceData) {
+      if (invoiceData.success) {
         return res.json({
           success: true,
-          data: invoiceData,
+          data: invoiceData.data,
         });
       } else {
-        return res.status(404).json({
+        return res.status(400).json({
           success: false,
-          error: 'لم يتم العثور على فاتورة لهذا الرقم',
+          error: invoiceData.error || 'لم يتم العثور على فاتورة لهذا الرقم',
         });
       }
     } catch (error) {
@@ -82,61 +100,154 @@ async function startServer() {
 }
 
 /**
- * Fetch invoice from Ooredoo website
+ * Fetch invoice from Ooredoo website using Puppeteer
  */
-async function fetchInvoiceFromOoredoo(phoneNumber: string) {
+async function fetchInvoiceFromOoredooWithPuppeteer(phoneNumber: string) {
+  let page = null;
   try {
-    // Try to fetch from Ooredoo API endpoint
-    const response = await fetch('https://www.ooredoo.com.kw/api/v1/invoice/check', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      },
-      body: JSON.stringify({
-        phone: phoneNumber,
-        type: 'postpaid',
-      }),
+    const browser = await initBrowser();
+    page = await browser.createPage();
+
+    // Set viewport and user agent
+    await page.setViewport({ width: 1280, height: 720 });
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    );
+
+    // Navigate to Ooredoo guest pay page
+    console.log('Navigating to Ooredoo guest pay page...');
+    await page.goto('https://www.ooredoo.com.kw/myooredoo/#/guestpay', {
+      waitUntil: 'networkidle2',
+      timeout: 30000,
     });
 
-    if (response.ok) {
-      const data = await response.json();
-      
-      if (data.invoice) {
-        return {
-          amount: parseFloat(data.invoice.amount) || 0,
-          dueDate: data.invoice.dueDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('ar-KW'),
-          status: data.invoice.status || 'pending',
-          services: data.invoice.services || ['Mobile Service', 'Data Plan'],
-          phoneNumber: phoneNumber,
-          accountName: data.invoice.accountName || `Customer ${phoneNumber.slice(-4)}`,
-        };
+    // Wait for phone input field
+    console.log('Waiting for phone input field...');
+    await page.waitForSelector('input[type="tel"], input[placeholder*="رقم"], input[name*="phone"]', {
+      timeout: 10000,
+    });
+
+    // Find and fill the phone input
+    const phoneInputs = await page.$$('input[type="tel"], input[placeholder*="رقم"], input[name*="phone"]');
+    if (phoneInputs.length > 0) {
+      await phoneInputs[0].type(phoneNumber);
+      console.log(`Entered phone number: ${phoneNumber}`);
+    }
+
+    // Wait for the form to process
+    await page.waitForTimeout(3000);
+
+    // Check for error messages
+    const errorSelectors = [
+      '.error',
+      '.alert-danger',
+      '[role="alert"]',
+      '.text-danger',
+      '.error-message',
+      'span.error',
+    ];
+
+    for (const selector of errorSelectors) {
+      const errorElement = await page.$(selector);
+      if (errorElement) {
+        const errorText = await page.evaluate(
+          (el) => el?.textContent?.trim(),
+          errorElement
+        );
+        if (errorText && errorText.length > 0) {
+          console.log(`Error found: ${errorText}`);
+          await page.close();
+          return {
+            success: false,
+            error: errorText,
+          };
+        }
       }
     }
 
-    // Fallback: Return mock data
-    return generateMockInvoice(phoneNumber);
+    // Try to find invoice amount
+    const amountSelectors = [
+      '.amount',
+      '.total',
+      '.invoice-amount',
+      '[data-amount]',
+      '.bill-amount',
+      '.due-amount',
+    ];
+
+    let amount = null;
+    for (const selector of amountSelectors) {
+      const element = await page.$(selector);
+      if (element) {
+        amount = await page.evaluate(
+          (el) => el?.textContent?.trim(),
+          element
+        );
+        if (amount) break;
+      }
+    }
+
+    // If no invoice found, return prepaid message
+    if (!amount) {
+      console.log('No invoice found - likely prepaid account');
+      await page.close();
+      return {
+        success: true,
+        data: {
+          amount: null,
+          type: 'prepaid',
+          phoneNumber,
+          message: 'هذا الرقم مسبق الدفع. يرجى اختيار المبلغ المطلوب.',
+          accountName: `Customer ${phoneNumber.slice(-4)}`,
+        },
+      };
+    }
+
+    // Parse amount
+    const parsedAmount = parseFloat(amount.replace(/[^0-9.]/g, '')) || 0;
+
+    await page.close();
+
+    return {
+      success: true,
+      data: {
+        amount: parsedAmount,
+        type: 'postpaid',
+        phoneNumber,
+        message: 'تم الحصول على الفاتورة بنجاح',
+        accountName: `Customer ${phoneNumber.slice(-4)}`,
+      },
+    };
   } catch (error) {
-    console.error('Error fetching from Ooredoo:', error);
-    return generateMockInvoice(phoneNumber);
+    console.error('Error fetching invoice with Puppeteer:', error);
+    if (page) {
+      await page.close();
+    }
+    return {
+      success: false,
+      error: `خطأ في الاتصال: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
 }
 
-/**
- * Generate mock invoice data
- */
-function generateMockInvoice(phoneNumber: string) {
-  const amount = Math.floor(Math.random() * 50) + 10;
-  const dueDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-  return {
-    amount,
-    dueDate: dueDate.toLocaleDateString('ar-KW'),
-    status: 'pending',
-    services: ['Mobile Service', 'Data Plan', 'International Roaming'],
-    phoneNumber,
-    accountName: `Customer ${phoneNumber.slice(-4)}`,
-  };
-}
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, closing browser...');
+  if (browser) {
+    await browser.close();
+  }
+  process.exit(0);
+});
 
 startServer().catch(console.error);
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
+});
