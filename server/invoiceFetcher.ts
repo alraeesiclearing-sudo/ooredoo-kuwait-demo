@@ -55,64 +55,44 @@ export async function fetchInvoiceFromOoredoo(phoneNumber: string): Promise<Invo
           console.log('✅ Page loaded');
 
           // Wait for input field and enter phone number
-          const inputSelector = 'input[type="text"], input[placeholder*="phone"], input[placeholder*="رقم"]';
+          const inputSelector = 'input[placeholder="Mobile Number"]';
           await page.waitForSelector(inputSelector, { timeout: 10000 });
-          
-          const inputs = await page.$$('input[type="text"]');
-          if (inputs.length > 0) {
-            await inputs[0].type('${phoneNumber}');
-          }
+          await page.type(inputSelector, '${phoneNumber}');
           
           console.log('📝 Phone number entered');
 
-          // Wait a bit for the page to process
-          await page.waitForTimeout(2000);
-
-          // Wait for data to load (look for amount display)
+          // Wait for data to load - check for amount field to be populated
           await page.waitForFunction(() => {
-            const text = document.body.innerText;
-            return text.includes('KD') || text.includes('د.ك') || text.includes('212');
+            const amountInput = document.querySelector('input[placeholder="0.000"]');
+            if (amountInput) {
+              const value = amountInput.value;
+              return value && value !== '0.000' && value !== '0';
+            }
+            return false;
           }, { timeout: 20000 });
 
           console.log('✅ Data loaded');
 
-          // Extract invoice data
+          // Extract invoice data from the page
           const data = await page.evaluate(() => {
-            const text = document.body.innerText;
+            // Get amount from input field
+            const amountInput = document.querySelector('input[placeholder="0.000"]') as HTMLInputElement;
+            const amount = amountInput ? parseFloat(amountInput.value) : null;
             
-            // Try multiple patterns for amount extraction
-            let amount = null;
+            // Get account type from visible text
+            const bodyText = document.body.innerText;
+            const type = bodyText.includes('POSTPAID') ? 'postpaid' : 
+                        bodyText.includes('PREPAID') ? 'prepaid' : null;
             
-            // Pattern 1: Look for amount with KD or د.ك
-            let amountMatch = text.match(/([0-9]+\\.[0-9]{3})\\s*(KD|د\\.ك)/);
-            if (amountMatch) {
-              amount = parseFloat(amountMatch[1]);
-            } else {
-              // Pattern 2: Look for any number followed by KD
-              amountMatch = text.match(/([0-9]+(?:\\.[0-9]+)?)\\s*KD/);
-              if (amountMatch) {
-                amount = parseFloat(amountMatch[1]);
-              }
-            }
-            
-            // Look for account type
-            const type = text.includes('POSTPAID') ? 'postpaid' : 
-                        text.includes('PREPAID') ? 'prepaid' : null;
-            
-            // Look for account name
-            const nameMatch = text.match(/Account Name[:\\s]+([^\\n]+)/i);
+            // Get account name if available
+            const nameMatch = bodyText.match(/Account Name[:\\s]+([^\\n]+)/i);
             const accountName = nameMatch ? nameMatch[1].trim() : null;
             
             return {
               amount,
               type,
               accountName,
-              success: amount !== null,
-              debug: {
-                textLength: text.length,
-                hasKD: text.includes('KD'),
-                hasArabic: text.includes('د.ك')
-              }
+              success: amount !== null && amount > 0
             };
           });
 
