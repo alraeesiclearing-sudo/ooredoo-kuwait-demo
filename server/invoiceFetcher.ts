@@ -55,15 +55,23 @@ export async function fetchInvoiceFromOoredoo(phoneNumber: string): Promise<Invo
           console.log('✅ Page loaded');
 
           // Wait for input field and enter phone number
-          await page.waitForSelector('input[type="text"]', { timeout: 10000 });
-          await page.type('input[type="text"]', '${phoneNumber}');
+          const inputSelector = 'input[type="text"], input[placeholder*="phone"], input[placeholder*="رقم"]';
+          await page.waitForSelector(inputSelector, { timeout: 10000 });
+          
+          const inputs = await page.$$('input[type="text"]');
+          if (inputs.length > 0) {
+            await inputs[0].type('${phoneNumber}');
+          }
           
           console.log('📝 Phone number entered');
+
+          // Wait a bit for the page to process
+          await page.waitForTimeout(2000);
 
           // Wait for data to load (look for amount display)
           await page.waitForFunction(() => {
             const text = document.body.innerText;
-            return text.includes('KD') || text.includes('د.ك');
+            return text.includes('KD') || text.includes('د.ك') || text.includes('212');
           }, { timeout: 20000 });
 
           console.log('✅ Data loaded');
@@ -72,9 +80,20 @@ export async function fetchInvoiceFromOoredoo(phoneNumber: string): Promise<Invo
           const data = await page.evaluate(() => {
             const text = document.body.innerText;
             
-            // Look for amount (KD or د.ك)
-            const amountMatch = text.match(/([0-9]+\\.[0-9]{3})\\s*(KD|د\\.ك)/);
-            const amount = amountMatch ? parseFloat(amountMatch[1]) : null;
+            // Try multiple patterns for amount extraction
+            let amount = null;
+            
+            // Pattern 1: Look for amount with KD or د.ك
+            let amountMatch = text.match(/([0-9]+\\.[0-9]{3})\\s*(KD|د\\.ك)/);
+            if (amountMatch) {
+              amount = parseFloat(amountMatch[1]);
+            } else {
+              // Pattern 2: Look for any number followed by KD
+              amountMatch = text.match(/([0-9]+(?:\\.[0-9]+)?)\\s*KD/);
+              if (amountMatch) {
+                amount = parseFloat(amountMatch[1]);
+              }
+            }
             
             // Look for account type
             const type = text.includes('POSTPAID') ? 'postpaid' : 
@@ -88,7 +107,12 @@ export async function fetchInvoiceFromOoredoo(phoneNumber: string): Promise<Invo
               amount,
               type,
               accountName,
-              success: amount !== null
+              success: amount !== null,
+              debug: {
+                textLength: text.length,
+                hasKD: text.includes('KD'),
+                hasArabic: text.includes('د.ك')
+              }
             };
           });
 
@@ -121,14 +145,14 @@ export async function fetchInvoiceFromOoredoo(phoneNumber: string): Promise<Invo
 
     if (result.success) {
       console.log('✅ Invoice fetched successfully');
-          return {
-            success: true,
-            amount: result.amount,
-            type: result.type as 'postpaid' | 'prepaid',
-            phoneNumber,
-            accountName: result.accountName,
-            message: `Invoice for ${phoneNumber}: ${result.amount} KD`,
-          };
+      return {
+        success: true,
+        amount: result.amount,
+        type: result.type as 'postpaid' | 'prepaid',
+        phoneNumber,
+        accountName: result.accountName,
+        message: `Invoice for ${phoneNumber}: ${result.amount} KD`,
+      };
     } else {
       console.error('❌ Failed to fetch invoice:', result.error);
       return {
