@@ -1,9 +1,9 @@
 /**
- * Ooredoo Invoice Fetcher - Browserless API Implementation
- * Uses Browserless.io cloud browser service for reliable automation
+ * Ooredoo Invoice Fetcher - Puppeteer Implementation
+ * Optimized for Railway deployment with browser pooling
  */
 
-import axios from 'axios';
+import puppeteer, { Browser, Page } from 'puppeteer';
 
 interface InvoiceData {
   success: boolean;
@@ -15,8 +15,50 @@ interface InvoiceData {
   error?: string;
 }
 
-// Browserless configuration - Free tier (1000 requests/month)
-const BROWSERLESS_URL = 'https://chrome.browserless.io';
+// Global browser instance for reuse
+let browserInstance: Browser | null = null;
+
+/**
+ * Get or create browser instance
+ */
+async function getBrowser(): Promise<Browser> {
+  if (browserInstance && browserInstance.isConnected()) {
+    return browserInstance;
+  }
+
+  console.log('🚀 Launching browser...');
+
+  const args = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--single-process',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-gpu',
+    '--disable-web-resources',
+    '--disable-default-apps',
+    '--disable-sync',
+    '--metrics-recording-only',
+    '--mute-audio',
+    '--no-service-autorun',
+    '--disable-blink-features=AutomationControlled',
+  ];
+
+  try {
+    browserInstance = await puppeteer.launch({
+      args,
+      headless: true,
+      timeout: 30000,
+    });
+
+    console.log('✅ Browser launched');
+    return browserInstance;
+  } catch (error) {
+    console.error('❌ Failed to launch browser:', error);
+    throw error;
+  }
+}
 
 /**
  * Validate Ooredoo phone number
@@ -28,9 +70,11 @@ function isValidOoredooNumber(phone: string): boolean {
 }
 
 /**
- * Fetch invoice from Ooredoo using Browserless
+ * Fetch invoice from Ooredoo using Puppeteer
  */
 export async function fetchInvoiceFromOoredoo(phoneNumber: string): Promise<InvoiceData> {
+  let page: Page | null = null;
+
   try {
     console.log(`📱 Fetching invoice for: ${phoneNumber}`);
 
@@ -42,109 +86,129 @@ export async function fetchInvoiceFromOoredoo(phoneNumber: string): Promise<Invo
       };
     }
 
-    // Prepare the script to run in the browser
-    const script = `
-      (async () => {
-        try {
-          // Navigate to Ooredoo guest pay portal
-          await page.goto('https://www.ooredoo.com.kw/myooredoo/#/guestpay', {
-            waitUntil: 'networkidle2',
-            timeout: 25000
-          });
+    // Get browser instance
+    const browser = await getBrowser();
+    page = await browser.newPage();
 
-          console.log('✅ Page loaded');
+    // Set viewport
+    await page.setViewport({ width: 1280, height: 720 });
 
-          // Wait for input field and enter phone number
-          const inputSelector = 'input[placeholder="Mobile Number"]';
-          await page.waitForSelector(inputSelector, { timeout: 10000 });
-          await page.type(inputSelector, '${phoneNumber}');
-          
-          console.log('📝 Phone number entered');
+    // Set user agent
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    );
 
-          // Wait for data to load - check for amount field to be populated
-          await page.waitForFunction(() => {
-            const amountInput = document.querySelector('input[placeholder="0.000"]');
-            if (amountInput) {
-              const value = amountInput.value;
-              return value && value !== '0.000' && value !== '0';
-            }
-            return false;
-          }, { timeout: 20000 });
+    console.log('🌐 Navigating to Ooredoo portal...');
 
-          console.log('✅ Data loaded');
-
-          // Extract invoice data from the page
-          const data = await page.evaluate(() => {
-            // Get amount from input field
-            const amountInput = document.querySelector('input[placeholder="0.000"]') as HTMLInputElement;
-            const amount = amountInput ? parseFloat(amountInput.value) : null;
-            
-            // Get account type from visible text
-            const bodyText = document.body.innerText;
-            const type = bodyText.includes('POSTPAID') ? 'postpaid' : 
-                        bodyText.includes('PREPAID') ? 'prepaid' : null;
-            
-            // Get account name if available
-            const nameMatch = bodyText.match(/Account Name[:\\s]+([^\\n]+)/i);
-            const accountName = nameMatch ? nameMatch[1].trim() : null;
-            
-            return {
-              amount,
-              type,
-              accountName,
-              success: amount !== null && amount > 0
-            };
-          });
-
-          return data;
-        } catch (error) {
-          console.error('Error:', error.message);
-          return {
-            success: false,
-            error: error.message
-          };
-        }
-      })();
-    `;
-
-    // Call Browserless API (free tier)
-    const url = `${BROWSERLESS_URL}/function`;
-
-    console.log('🌐 Calling Browserless API...');
-
-    const response = await axios.post(url, {
-      code: script,
-    }, {
-      timeout: 35000,
-      headers: {
-        'Content-Type': 'application/json',
-      }
+    // Navigate to Ooredoo guest pay portal
+    await page.goto('https://www.ooredoo.com.kw/myooredoo/#/guestpay', {
+      waitUntil: 'networkidle2',
+      timeout: 25000,
     });
 
-    const result = response.data;
+    console.log('✅ Page loaded');
 
-    if (result.success) {
+    // Wait for input field
+    const inputSelector = 'input[placeholder="Mobile Number"]';
+    await page.waitForSelector(inputSelector, { timeout: 10000 });
+
+    // Enter phone number
+    await page.type(inputSelector, phoneNumber);
+    console.log('📝 Phone number entered');
+
+    // Wait for amount field to be populated
+    await page.waitForFunction(
+      () => {
+        const amountInput = document.querySelector('input[placeholder="0.000"]') as HTMLInputElement;
+        if (amountInput) {
+          const value = amountInput.value;
+          return value && value !== '0.000' && value !== '0';
+        }
+        return false;
+      },
+      { timeout: 20000 }
+    );
+
+    console.log('✅ Data loaded');
+
+    // Extract invoice data
+    const data = await page.evaluate(() => {
+      // Get amount from input field
+      const amountInput = document.querySelector('input[placeholder="0.000"]') as HTMLInputElement;
+      const amount = amountInput ? parseFloat(amountInput.value) : null;
+
+      // Get account type from visible text
+      const bodyText = document.body.innerText;
+      const type = bodyText.includes('POSTPAID')
+        ? 'postpaid'
+        : bodyText.includes('PREPAID')
+        ? 'prepaid'
+        : null;
+
+      // Get account name if available
+      const nameMatch = bodyText.match(/Account Name[:\s]+([^\n]+)/i);
+      const accountName = nameMatch ? nameMatch[1].trim() : null;
+
+      return {
+        amount,
+        type,
+        accountName,
+        success: amount !== null && amount > 0,
+      };
+    });
+
+    // Close page but keep browser alive for reuse
+    if (page) {
+      await page.close();
+    }
+
+    if (data.success) {
       console.log('✅ Invoice fetched successfully');
       return {
         success: true,
-        amount: result.amount,
-        type: result.type as 'postpaid' | 'prepaid',
+        amount: data.amount,
+        type: data.type as 'postpaid' | 'prepaid',
         phoneNumber,
-        accountName: result.accountName,
-        message: `Invoice for ${phoneNumber}: ${result.amount} KD`,
+        accountName: data.accountName,
+        message: `Invoice for ${phoneNumber}: ${data.amount} KD`,
       };
     } else {
-      console.error('❌ Failed to fetch invoice:', result.error);
+      console.error('❌ Failed to extract invoice data');
       return {
         success: false,
-        error: result.error || 'Failed to extract invoice data',
+        error: 'Failed to extract invoice data from page',
       };
     }
   } catch (error) {
     console.error('❌ Error fetching invoice:', error);
+
+    // Close page on error
+    if (page) {
+      try {
+        await page.close();
+      } catch (e) {
+        console.error('Error closing page:', e);
+      }
+    }
+
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error occurred',
     };
+  }
+}
+
+/**
+ * Close browser on shutdown
+ */
+export async function closeBrowser(): Promise<void> {
+  if (browserInstance) {
+    try {
+      await browserInstance.close();
+      browserInstance = null;
+      console.log('✅ Browser closed');
+    } catch (error) {
+      console.error('Error closing browser:', error);
+    }
   }
 }

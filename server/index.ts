@@ -2,10 +2,19 @@ import express from "express";
 import { createServer } from "http";
 import path from "path";
 import { fileURLToPath } from "url";
-import { fetchInvoiceFromOoredoo } from "./invoiceFetcher.js";
+import { fetchInvoiceFromOoredoo, closeBrowser } from "./invoiceFetcher.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/**
+ * Validate Ooredoo phone number
+ */
+function isValidOoredooNumber(phone: string): boolean {
+  const prefixes = ['50', '51', '55', '56', '68', '69', '97', '98'];
+  const cleanPhone = phone.replace(/\D/g, '');
+  return prefixes.some(prefix => cleanPhone.startsWith(prefix)) && cleanPhone.length === 8;
+}
 
 /**
  * Start Express server
@@ -100,7 +109,7 @@ async function startServer() {
   server.listen(PORT, () => {
     console.log(`\n✅ Server running on http://localhost:${PORT}/`);
     console.log(`📱 API endpoint: POST http://localhost:${PORT}/api/ooredoo/invoice`);
-    console.log(`🎭 Using Playwright for lightweight browser automation\n`);
+    console.log(`🎭 Using Puppeteer for browser automation\n`);
   });
 
   return { app, server };
