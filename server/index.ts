@@ -8,10 +8,26 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let browser: Browser | null = null;
+let browserInitPromise: Promise<Browser | null> | null = null;
 
-async function initBrowser() {
-  if (!browser) {
+/**
+ * Initialize browser once and reuse it
+ */
+async function initBrowser(): Promise<Browser | null> {
+  // If already initializing, wait for it
+  if (browserInitPromise) {
+    return browserInitPromise;
+  }
+
+  // If already initialized, return it
+  if (browser) {
+    return browser;
+  }
+
+  // Start initialization
+  browserInitPromise = (async () => {
     try {
+      console.log("🚀 Launching Puppeteer browser...");
       browser = await puppeteer.launch({
         headless: true,
         args: [
@@ -19,14 +35,26 @@ async function initBrowser() {
           "--disable-setuid-sandbox",
           "--disable-gpu",
           "--disable-dev-shm-usage",
+          "--disable-extensions",
+          "--disable-web-resources",
+          "--disable-sync",
+          "--disable-plugins",
+          "--disable-default-apps",
+          "--disable-preconnect",
+          "--single-process", // Use single process to save memory
         ],
       });
+      console.log("✅ Browser launched successfully");
+      return browser;
     } catch (error) {
-      console.error("Failed to launch browser:", error);
+      console.error("❌ Failed to launch browser:", error);
       browser = null;
+      browserInitPromise = null;
+      return null;
     }
-  }
-  return browser;
+  })();
+
+  return browserInitPromise;
 }
 
 async function startServer() {
@@ -64,10 +92,13 @@ async function startServer() {
       // Try to fetch invoice from Ooredoo using Puppeteer with timeout
       const invoiceData = await Promise.race([
         fetchInvoiceFromOoredooWithPuppeteer(phone),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Timeout')), 10000)
-        )
-      ]).catch(() => null);
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Timeout')), 12000)
+        ),
+      ]).catch((error) => {
+        console.error('Invoice fetch error:', error);
+        return null;
+      });
 
       if (invoiceData && invoiceData.success) {
         return res.json({
@@ -75,18 +106,10 @@ async function startServer() {
           data: invoiceData.data,
         });
       } else {
-        // Fallback to mock data if Puppeteer fails
-        console.log('Using mock data for phone:', phone);
-        const mockAmount = Math.floor(Math.random() * 50) + 10;
-        return res.json({
-          success: true,
-          data: {
-            amount: mockAmount,
-            type: phone.startsWith('50') || phone.startsWith('51') ? 'postpaid' : 'prepaid',
-            phoneNumber: phone,
-            message: 'تم الحصول على الفاتورة بنجاح',
-            accountName: `Customer ${phone.slice(-4)}`,
-          },
+        // If Puppeteer fails, return error
+        return res.status(500).json({
+          success: false,
+          error: invoiceData?.error || 'Unable to fetch invoice',
         });
       }
     } catch (error) {
@@ -98,151 +121,152 @@ async function startServer() {
     }
   });
 
-  // Serve static files from dist/public in production
-  const staticPath =
-    process.env.NODE_ENV === "production"
-      ? path.resolve(__dirname, "public")
-      : path.resolve(__dirname, "..", "dist", "public");
+  // Serve static files
+  const clientPath = path.join(__dirname, "../client/dist");
+  app.use(express.static(clientPath));
 
-  app.use(express.static(staticPath));
-
-  // Handle client-side routing - serve index.html for all routes
-  app.get("*", (_req, res) => {
-    res.sendFile(path.join(staticPath, "index.html"));
+  // SPA fallback
+  app.get("*", (req, res) => {
+    res.sendFile(path.join(clientPath, "index.html"));
   });
 
-  const port = process.env.PORT || 3000;
-
-  server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
+  // Start listening
+  const PORT = process.env.PORT || 8080;
+  server.listen(PORT, () => {
+    console.log(`\n✅ Server running on http://localhost:${PORT}/`);
+    console.log(`📱 API endpoint: POST http://localhost:${PORT}/api/ooredoo/invoice`);
   });
+
+  return { app, server };
 }
 
 /**
- * Fetch invoice from Ooredoo website using Puppeteer
+ * Fetch invoice from Ooredoo with optimized Puppeteer
  */
-async function fetchInvoiceFromOoredooWithPuppeteer(phoneNumber: string) {
-  let page = null;
+async function fetchInvoiceFromOoredooWithPuppeteer(
+  phoneNumber: string
+): Promise<{ success: boolean; data?: any; error?: string }> {
+  let page: Page | null = null;
+
   try {
-    const browserInstance = await initBrowser();
-    if (!browserInstance) {
+    const b = await initBrowser();
+    if (!b) {
       throw new Error('Browser not available');
     }
 
-    page = await browserInstance.createPage();
+    console.log(`📱 Fetching invoice for: ${phoneNumber}`);
+
+    // Create a new page (reuse browser)
+    page = await b.newPage();
 
     // Set viewport and user agent
     await page.setViewport({ width: 1280, height: 720 });
     await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
 
-    // Navigate to Ooredoo guest pay page with timeout
-    console.log('Navigating to Ooredoo guest pay page...');
-    await page.goto('https://www.ooredoo.com.kw/myooredoo/#/guestpay', {
-      waitUntil: 'networkidle2',
-      timeout: 15000,
-    });
+    // Set timeout for navigation
+    const navigationTimeout = 15000;
+
+    // Navigate to Ooredoo guest pay page
+    console.log('🌐 Navigating to Ooredoo...');
+    try {
+      await page.goto('https://www.ooredoo.com.kw/myooredoo/#/guestpay', {
+        waitUntil: 'networkidle2',
+        timeout: navigationTimeout,
+      });
+    } catch (error) {
+      console.warn('⚠️ Navigation timeout, continuing anyway...');
+    }
 
     // Wait for phone input field
-    console.log('Waiting for phone input field...');
-    await page.waitForSelector('input[type="tel"], input[placeholder*="رقم"], input[name*="phone"]', {
-      timeout: 5000,
+    console.log('🔍 Waiting for phone input field...');
+    try {
+      await page.waitForSelector('input[placeholder="Mobile Number"]', {
+        timeout: 5000,
+      });
+    } catch (error) {
+      throw new Error('Phone input field not found');
+    }
+
+    // Clear and enter phone number
+    console.log('✍️ Entering phone number...');
+    await page.evaluate(() => {
+      const input = document.querySelector(
+        'input[placeholder="Mobile Number"]'
+      ) as HTMLInputElement;
+      if (input) {
+        input.value = '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
     });
 
-    // Find and fill the phone input
-    const phoneInputs = await page.$$('input[type="tel"], input[placeholder*="رقم"], input[name*="phone"]');
-    if (phoneInputs.length > 0) {
-      await phoneInputs[0].type(phoneNumber);
-      console.log(`Entered phone number: ${phoneNumber}`);
-    }
+    // Type phone number slowly
+    await page.type('input[placeholder="Mobile Number"]', phoneNumber, {
+      delay: 50,
+    });
 
-    // Wait for the form to process
+    // Wait for amount field to be populated
+    console.log('⏳ Waiting for invoice data...');
     await page.waitForTimeout(2000);
 
-    // Check for error messages
-    const errorSelectors = [
-      '.error',
-      '.alert-danger',
-      '[role="alert"]',
-      '.text-danger',
-      '.error-message',
-      'span.error',
-    ];
+    // Extract data from page
+    console.log('📊 Extracting invoice data...');
+    const result = await page.evaluate(() => {
+      const phoneInput = document.querySelector(
+        'input[placeholder="Mobile Number"]'
+      ) as HTMLInputElement;
+      const amountInput = document.querySelector(
+        'input[placeholder="0.000"]'
+      ) as HTMLInputElement;
 
-    for (const selector of errorSelectors) {
-      const errorElement = await page.$(selector);
-      if (errorElement) {
-        const errorText = await page.evaluate(
-          (el) => el?.textContent?.trim(),
-          errorElement
-        );
-        if (errorText && errorText.length > 0) {
-          console.log(`Error found: ${errorText}`);
-          await page.close();
-          return {
-            success: false,
-            error: errorText,
-          };
-        }
-      }
-    }
+      const phone = phoneInput?.value || '';
+      const amountStr = amountInput?.value || '0';
+      const amount = parseFloat(amountStr) || 0;
 
-    // Try to find invoice amount
-    const amountSelectors = [
-      '.amount',
-      '.total',
-      '.invoice-amount',
-      '[data-amount]',
-      '.bill-amount',
-      '.due-amount',
-    ];
+      // Look for account type and other info
+      const pageText = document.body.innerText;
+      const isPostpaid = pageText.includes('POSTPAID') || amount > 0;
 
-    let amount = null;
-    for (const selector of amountSelectors) {
-      const element = await page.$(selector);
-      if (element) {
-        amount = await page.evaluate(
-          (el) => el?.textContent?.trim(),
-          element
-        );
-        if (amount) break;
-      }
-    }
-
-    // If no invoice found, return prepaid message
-    if (!amount) {
-      console.log('No invoice found - likely prepaid account');
-      await page.close();
       return {
-        success: true,
-        data: {
-          amount: null,
-          type: 'prepaid',
-          phoneNumber,
-          message: 'هذا الرقم مسبق الدفع. يرجى اختيار المبلغ المطلوب.',
-          accountName: `Customer ${phoneNumber.slice(-4)}`,
-        },
+        phone,
+        amount,
+        isPostpaid,
+        hasError: amount === 0 && !isPostpaid,
+      };
+    });
+
+    console.log('📋 Extracted data:', result);
+
+    // Check if we got valid data
+    if (result.hasError || (result.amount === 0 && !result.isPostpaid)) {
+      return {
+        success: false,
+        error: 'No invoice found for this number',
       };
     }
 
-    // Parse amount
-    const parsedAmount = parseFloat(amount.replace(/[^0-9.]/g, '')) || 0;
-
-    await page.close();
-
+    // Return success
     return {
       success: true,
       data: {
-        amount: parsedAmount,
-        type: 'postpaid',
+        amount: result.amount,
+        type: result.isPostpaid ? 'postpaid' : 'prepaid',
         phoneNumber,
         message: 'تم الحصول على الفاتورة بنجاح',
         accountName: `Customer ${phoneNumber.slice(-4)}`,
       },
     };
   } catch (error) {
-    console.error('Error fetching invoice with Puppeteer:', error);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error('❌ Error fetching invoice:', errorMsg);
+    return {
+      success: false,
+      error: errorMsg,
+    };
+  } finally {
+    // Close page but keep browser alive
     if (page) {
       try {
         await page.close();
@@ -250,19 +274,18 @@ async function fetchInvoiceFromOoredooWithPuppeteer(phoneNumber: string) {
         console.error('Error closing page:', e);
       }
     }
-    return {
-      success: false,
-      error: `خطأ في الاتصال: ${error instanceof Error ? error.message : String(error)}`,
-    };
   }
 }
 
-// Graceful shutdown
+/**
+ * Graceful shutdown
+ */
 process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, closing browser...');
+  console.log('\n🛑 SIGTERM received, shutting down gracefully...');
   if (browser) {
     try {
       await browser.close();
+      console.log('✅ Browser closed');
     } catch (e) {
       console.error('Error closing browser:', e);
     }
@@ -270,15 +293,29 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-startServer().catch(console.error);
+process.on('SIGINT', async () => {
+  console.log('\n🛑 SIGINT received, shutting down gracefully...');
+  if (browser) {
+    try {
+      await browser.close();
+      console.log('✅ Browser closed');
+    } catch (e) {
+      console.error('Error closing browser:', e);
+    }
+  }
+  process.exit(0);
+});
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
+  console.error('❌ Uncaught Exception:', error);
   process.exit(1);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
   process.exit(1);
 });
+
+// Start server
+startServer().catch(console.error);
