@@ -1,0 +1,37 @@
+{
+  "name": "ooredoo-invoice-bot",
+  "version": "1.0.0",
+  "description": "Ooredoo Invoice Bot - Fetches invoice data from Ooredoo guest pay portal",
+  "main": "ooredoo-bot.ts",
+  "type": "module",
+  "scripts": {
+    "start": "ts-node ooredoo-bot.ts",
+    "test": "ts-node ooredoo-bot.ts 50123456",
+    "test:multiple": "bash test-multiple.sh",
+    "dev": "ts-node ooredoo-bot.ts",
+    "build": "tsc",
+    "lint": "eslint .",
+    "format": "prettier --write ."
+  },
+  "keywords": [
+    "ooredoo",
+    "invoice",
+    "bot",
+    "web-scraping",
+    "puppeteer",
+    "automation"
+  ],
+  "author": "Ooredoo Demo Team",
+  "license": "MIT",
+  "dependencies": {
+    "puppeteer": "^24.43.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
